@@ -1,0 +1,7 @@
+{
+  "checkpoint_name": "model_traced.pt",
+  "method": "segmentation",
+  "binary": true,
+  "final_layer": "sigmoid",
+  "engine": "torch"
+}
