@@ -34,7 +34,7 @@ This service is designed to be **frontend-agnostic**, serving segmentation masks
 
 1.  **Clone the repository:**
     ```bash
-    git clone [https://github.com/robbinc91/neuroview-backend](https://github.com/robbinc91/neuroview-backend)
+    git clone https://github.com/robbinc91/neuroview-backend
     cd neuroview-backend
     ```
 
@@ -105,7 +105,7 @@ The engine supports loading models defined in raw Python code, which is useful w
 
 If you have a `weights.pth` and a `model.py` file:
 
-**1. `models/my_model/model.json**`
+1. `models/my_model/model.json**`
 
 ```json
 {
@@ -122,7 +122,7 @@ If you have a `weights.pth` and a `model.py` file:
 
 ```
 
-**2. `models/my_model/architecture.py**`
+2. `models/my_model/architecture.py**`
 
 ```python
 import torch.nn as nn
@@ -137,7 +137,7 @@ class MyUNet(nn.Module):
 
 If you use Model Subclassing in Keras and only have weights:
 
-**1. `models/keras_sub/model.json**`
+1. `models/keras_sub/model.json**`
 
 ```json
 {
