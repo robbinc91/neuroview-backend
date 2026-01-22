@@ -1,4 +1,3 @@
-```markdown
 # 🧠 NeuroView AI Engine
 
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue) ![FastAPI](https://img.shields.io/badge/FastAPI-0.95%2B-teal) ![PyTorch](https://img.shields.io/badge/PyTorch-Supported-orange) ![TensorFlow](https://img.shields.io/badge/TensorFlow-Supported-orange)
