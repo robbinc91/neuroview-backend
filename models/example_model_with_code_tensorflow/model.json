@@ -1,0 +1,12 @@
+{
+  "checkpoint_name": "weights.h5",
+  "method": "classification",
+  "engine": "keras",
+  "final_layer": "softmax",
+  "python_file": "my_keras_arch.py",
+  "class_name": "MyResNet3D",
+  "model_args": {
+    "filters": 16,
+    "num_classes": 2
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "checkpoint_name": "unet_checkpoint.h5",
+  "method": "segmentation",
+  "binary": true,
+  "final_layer": "sigmoid",
+  "engine": "keras",
+  "custom_objects": {
+    "dice_loss": "my_dice_loss"
+  }
+}
