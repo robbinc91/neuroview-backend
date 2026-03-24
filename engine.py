@@ -2,11 +2,15 @@ import os
 import json
 import torch
 import numpy as np
-import tensorflow as tf
 import importlib.util
 import sys
 from typing import Dict, Any, Optional
 from schemas import ModelMetadata, ModelEngine, ModelMethod, FinalLayer
+
+try:
+    import tensorflow as tf
+except Exception:
+    tf = None
 
 class InferenceEngine:
     def __init__(self, models_dir: str = "models"):
@@ -80,6 +84,9 @@ class InferenceEngine:
         2. Standard load_model (for SavedModel/H5)
         """
         
+        if tf is None:
+            raise RuntimeError("TensorFlow is not installed but a Keras model is configured")
+
         # Option A: Python Class Definition (Subclassed Model)
         if meta.python_file and meta.class_name:
             print(f"   ↳ Instantiating Keras Subclass {meta.class_name} from {meta.python_file}...")
