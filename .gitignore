@@ -1,1 +1,15 @@
 .venv
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# OS
+.DS_Store
+
+# Environment
+*.env

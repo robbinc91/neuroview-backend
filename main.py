@@ -1,4 +1,6 @@
 import asyncio
+import base64
+import json
 import time
 from contextlib import asynccontextmanager
 from tempfile import NamedTemporaryFile
@@ -14,21 +16,61 @@ from fastapi.responses import JSONResponse, Response
 
 from config import settings
 from engine import InferenceEngine
-from schemas import ErrorResponse, ModelListItem, ModelMethod, VersionResponse
+from jobs import cleanup_expired_jobs, create_job, get_job, store_count, update_job
+from logger import get_logger
+from schemas import (
+    ErrorResponse,
+    JobCreateRequest,
+    JobResponse,
+    JobStatus,
+    ModelListItem,
+    ModelMethod,
+    PredictJsonRequest,
+    VersionResponse,
+)
 from validation import parse_dimensions, parse_raw_volume, validate_model_id
+
+log = get_logger(__name__)
 
 # --- LIFECYCLE MANAGEMENT ---
 engine = InferenceEngine()
 rate_buckets = defaultdict(deque)
 RATE_LIMIT_WINDOW_SECONDS = 60
 RATE_LIMIT_MAX_REQUESTS = 60
+_running_jobs = 0
+_jobs_lock = asyncio.Lock()
+_cleanup_task = None
+
+
+def _cleanup_rate_buckets():
+    now = time.time()
+    expired = [
+        ip for ip, bucket in rate_buckets.items()
+        if not bucket or now - bucket[-1] > RATE_LIMIT_WINDOW_SECONDS * 2
+    ]
+    for ip in expired:
+        del rate_buckets[ip]
+    return len(expired)
+
+
+async def _periodic_cleanup():
+    while True:
+        await asyncio.sleep(300)
+        removed = cleanup_expired_jobs(settings.job_ttl_seconds)
+        stale = _cleanup_rate_buckets()
+        if removed or stale:
+            log.info("Cleaned up %d expired jobs, %d stale rate buckets", removed, stale)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Load models
+    global _cleanup_task
+    _cleanup_task = asyncio.create_task(_periodic_cleanup())
     engine.load_all_models()
+    log.info("Server started, serving on 0.0.0.0:8000")
     yield
-    # Shutdown logic if needed
+    _cleanup_task.cancel()
+    log.info("Server shutting down")
 
 app = FastAPI(lifespan=lifespan)
 
@@ -58,6 +100,7 @@ async def rate_limit_middleware(request: Request, call_next):
     while bucket and now - bucket[0] > RATE_LIMIT_WINDOW_SECONDS:
         bucket.popleft()
     if len(bucket) >= RATE_LIMIT_MAX_REQUESTS:
+        log.warning("Rate limit exceeded for client %s", client_ip)
         payload = ErrorResponse(
             error="Rate limit exceeded",
             detail="Too many requests, please retry later",
@@ -208,6 +251,172 @@ async def predict_legacy(model_id: str, file: UploadFile = File(...)):
         status_code=400,
         content=payload.model_dump(),
     )
+
+async def _run_job_in_background(
+    job_id: str, model_id: str, data: np.ndarray, dims: tuple
+):
+    global _running_jobs
+    try:
+        result = await asyncio.wait_for(
+            asyncio.to_thread(engine.run_inference, model_id, data),
+            timeout=settings.inference_timeout_seconds,
+        )
+        if tuple(result.shape) != tuple(dims):
+            update_job(
+                job_id,
+                status=JobStatus.FAILED,
+                completed_at=time.time(),
+                error=f"Expected output dimensions {list(dims)}, got {list(result.shape)}",
+            )
+            return
+
+        nifti_bytes = _to_nii_gz_bytes(result)
+        nifti_b64 = base64.b64encode(nifti_bytes).decode("ascii")
+        update_job(
+            job_id,
+            status=JobStatus.COMPLETED,
+            completed_at=time.time(),
+            result_nifti_base64=nifti_b64,
+        )
+    except asyncio.TimeoutError:
+        update_job(
+            job_id,
+            status=JobStatus.FAILED,
+            completed_at=time.time(),
+            error="Inference timed out",
+        )
+    except Exception as exc:
+        update_job(
+            job_id,
+            status=JobStatus.FAILED,
+            completed_at=time.time(),
+            error=str(exc),
+        )
+    finally:
+        async with _jobs_lock:
+            _running_jobs -= 1
+
+
+def _decode_and_validate(body, request) -> tuple | None:
+    """Shared validation for JSON endpoints. Returns (dims, data) or sends an error response."""
+    if body.model_id not in engine.loaded_models:
+        return _error(404, "Unknown model", f"Model '{body.model_id}' not found", request)
+
+    meta = engine.metadata_store[body.model_id]
+    if meta.method != ModelMethod.SEGMENTATION:
+        return _error(422, "Input/model mismatch", "Selected model is not a segmentation model", request)
+
+    try:
+        dims = parse_dimensions(json.dumps(body.dimensions))
+    except ValueError as exc:
+        return _error(400, "Invalid dimensions", str(exc), request)
+
+    try:
+        content = base64.b64decode(body.file_base64)
+    except Exception as exc:
+        return _error(400, "Invalid base64 payload", str(exc), request)
+
+    if len(content) > settings.max_upload_bytes:
+        return _error(413, "Payload too large", "Input exceeds configured maximum size", request)
+
+    try:
+        data = parse_raw_volume(content, dims, settings.max_voxels)
+    except ValueError as exc:
+        return _error(400, "Invalid payload", str(exc), request)
+
+    return dims, data
+
+
+@app.post("/predict-json")
+async def predict_json(
+    request: Request,
+    body: PredictJsonRequest,
+):
+    """JSON-based inference endpoint — returns NIfTI bytes synchronously."""
+    result = _decode_and_validate(body, request)
+    if isinstance(result, JSONResponse):
+        return result
+    dims, data = result
+
+    try:
+        inference_result = await asyncio.wait_for(
+            asyncio.to_thread(engine.run_inference, body.model_id, data),
+            timeout=settings.inference_timeout_seconds,
+        )
+    except asyncio.TimeoutError:
+        return _error(503, "Model unavailable", "Inference timed out", request)
+    except Exception as exc:
+        return _error(500, "Inference failed", str(exc), request)
+
+    if tuple(inference_result.shape) != tuple(dims):
+        return _error(
+            422,
+            "Input/model mismatch",
+            f"Expected output dimensions {list(dims)}, got {list(inference_result.shape)}",
+            request,
+        )
+
+    payload = _to_nii_gz_bytes(inference_result)
+    return Response(
+        content=payload,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": 'attachment; filename="segmentation.nii.gz"'},
+    )
+
+
+@app.post("/jobs")
+async def submit_job(
+    request: Request,
+    body: JobCreateRequest,
+):
+    """Submit an inference job — returns immediately with a job_id."""
+    global _running_jobs
+
+    result = _decode_and_validate(body, request)
+    if isinstance(result, JSONResponse):
+        return result
+    dims, data = result
+
+    async with _jobs_lock:
+        if _running_jobs >= settings.max_concurrent_jobs:
+            return _error(503, "Too many jobs", "Maximum concurrent jobs reached", request)
+        _running_jobs += 1
+
+    record = create_job(body.model_id)
+    update_job(record.job_id, status=JobStatus.RUNNING, started_at=time.time())
+
+    asyncio.create_task(_run_job_in_background(record.job_id, body.model_id, data, dims))
+
+    return JobResponse(
+        job_id=record.job_id,
+        status=JobStatus.RUNNING,
+        model_id=body.model_id,
+        created_at=record.created_at,
+        started_at=record.started_at,
+    )
+
+
+@app.get("/jobs/{job_id}")
+async def get_job_status(job_id: str, request: Request):
+    """Poll a job for status and result."""
+    record = get_job(job_id)
+    if record is None:
+        return _error(404, "Job not found", f"Job '{job_id}' not found", request)
+
+    if store_count() > 100:
+        cleanup_expired_jobs(settings.job_ttl_seconds)
+
+    return JobResponse(
+        job_id=record.job_id,
+        status=record.status,
+        model_id=record.model_id,
+        created_at=record.created_at,
+        started_at=record.started_at,
+        completed_at=record.completed_at,
+        result_nifti_base64=record.result_nifti_base64,
+        error=record.error,
+    )
+
 
 if __name__ == "__main__":
     import uvicorn

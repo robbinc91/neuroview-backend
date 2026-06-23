@@ -11,6 +11,8 @@ class Settings:
     allowed_origins_raw: str = os.getenv("ALLOWED_ORIGINS", "*")
     backend_version: str = os.getenv("BACKEND_VERSION", "1.0.0")
     model_pack_version: str = os.getenv("MODEL_PACK_VERSION", "dev")
+    job_ttl_seconds: int = int(os.getenv("JOB_TTL_SECONDS", "3600"))
+    max_concurrent_jobs: int = int(os.getenv("MAX_CONCURRENT_JOBS", "10"))
 
     @property
     def allowed_origins(self) -> List[str]:

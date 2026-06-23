@@ -1,6 +1,6 @@
 from enum import Enum
 from typing import Optional, Dict, Any, List, Union
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 class ModelEngine(str, Enum):
     KERAS = "keras"
@@ -64,3 +64,48 @@ class VersionResponse(BaseModel):
     service: str = Field(default="neuroview-backend")
     version: str
     model_pack_version: str
+
+
+class JobStatus(str, Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class PredictJsonRequest(BaseModel):
+    file_base64: str
+    dimensions: List[int]
+    model_id: str
+
+    @field_validator("dimensions")
+    @classmethod
+    def dimensions_must_be_three(cls, v: List[int]) -> List[int]:
+        if len(v) != 3:
+            raise ValueError("dimensions must be a 3-element array [x, y, z]")
+        return v
+
+
+class JobCreateRequest(BaseModel):
+    """Same shape as PredictJsonRequest — used for POST /jobs."""
+    file_base64: str
+    dimensions: List[int]
+    model_id: str
+
+    @field_validator("dimensions")
+    @classmethod
+    def dimensions_must_be_three(cls, v: List[int]) -> List[int]:
+        if len(v) != 3:
+            raise ValueError("dimensions must be a 3-element array [x, y, z]")
+        return v
+
+
+class JobResponse(BaseModel):
+    job_id: str
+    status: JobStatus
+    model_id: str
+    created_at: float
+    started_at: Optional[float] = None
+    completed_at: Optional[float] = None
+    result_nifti_base64: Optional[str] = None
+    error: Optional[str] = None

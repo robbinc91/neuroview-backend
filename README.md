@@ -160,53 +160,70 @@ If you use Model Subclassing in Keras and only have weights:
 Retrieves the metadata for all loaded models.
 
 * **Endpoint:** `GET /models`
-* **Response:**
+* **Response:** JSON array of model objects
 ```json
-{
-  "brain_tumor_seg": {
+[
+  {
     "id": "brain_tumor_seg",
-    "checkpoint_name": "checkpoint.pt",
-    "method": "segmentation",
-    "engine": "torch",
-    ...
+    "name": "Brain Tumor Segmentation",
+    "description": "Segmentation model using torch",
+    "method_id": "brain_tumor_seg",
+    "method_name": "Brain Tumor Segmentation"
   }
-}
-
+]
 ```
 
+### 2. Get Model Details
 
+* **Endpoint:** `GET /models/{model_id}`
+* **Response:** Single model object (same shape as items in `GET /models`)
 
-### 2. Run Inference
+### 3. Run Inference (multipart)
 
-Uploads a NIfTI volume and returns the processed result.
+Uploads a raw voxel buffer and returns a segmentation mask.
 
-* **Endpoint:** `POST /predict/{model_id}`
-* **Parameters:**
-* `model_id`: The folder name of the model to use.
-* `file`: The NIfTI file (`.nii` or `.nii.gz`) uploaded as form-data.
+* **Endpoint:** `POST /predict`
+* **Content-Type:** `multipart/form-data`
+* **Form fields:**
+  - `file`: raw binary voxel buffer (named `volume.raw`)
+  - `dimensions`: JSON stringified array, e.g. `"[256,256,160]"`
+  - `model_id`: model ID from `GET /models`
+* **Response:** `Content-Type: application/octet-stream`, body is a `.nii.gz` file
 
+### 4. Run Inference (JSON)
 
+Same as `POST /predict` but accepts a JSON body with base64-encoded voxels.
 
-#### Scenario A: Segmentation
-
-Returns a streaming NIfTI file.
-
-* **Response Header:** `Content-Type: application/gzip`
-* **Body:** Binary `.nii.gz` file content.
-
-#### Scenario B: Classification
-
-Returns a JSON object with predictions.
-
-* **Response Header:** `Content-Type: application/json`
+* **Endpoint:** `POST /predict-json`
+* **Content-Type:** `application/json`
 * **Body:**
 ```json
 {
-  "model": "lung_nodule_classifier",
-  "prediction": [0.05, 0.95] 
+  "file_base64": "<base64-encoded raw voxel bytes>",
+  "dimensions": [256, 256, 160],
+  "model_id": "brain_tumor_seg"
 }
-
 ```
+* **Response:** `Content-Type: application/octet-stream`, body is a `.nii.gz` file
+
+### 5. Async Job API
+
+Submit long-running inference jobs without blocking the HTTP connection.
+
+* **Submit:** `POST /jobs`
+  - Same JSON body as `POST /predict-json`
+  - Returns `200` with `{"job_id": "...", "status": "running", ...}`
+* **Poll:** `GET /jobs/{job_id}`
+  - Returns `{"status": "running" | "completed" | "failed", ...}`
+  - Completed jobs include `result_nifti_base64` (base64-encoded `.nii.gz`)
+  - Failed jobs include `error` message
+
+### 6. Utility Endpoints
+
+| Endpoint | Description |
+|---|---|
+| `GET /health` | `{"status": "ok", "loaded_models": N}` |
+| `GET /version` | `{"service": "neuroview-backend", "version": "1.0.0", "model_pack_version": "dev"}` |
 
 
 

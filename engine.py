@@ -6,6 +6,9 @@ import importlib.util
 import sys
 from typing import Dict, Any, Optional
 from schemas import ModelMetadata, ModelEngine, ModelMethod, FinalLayer
+from logger import get_logger
+
+log = get_logger(__name__)
 
 try:
     import tensorflow as tf
@@ -18,7 +21,7 @@ class InferenceEngine:
         self.loaded_models: Dict[str, Any] = {}
         self.metadata_store: Dict[str, ModelMetadata] = {}
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        print(f"⚡ Engine initialized on {self.device.upper()}")
+        log.info("Engine initialized on %s", self.device.upper())
 
     def load_all_models(self):
         # ... (Same directory scanning logic as before) ...
@@ -27,7 +30,7 @@ class InferenceEngine:
             os.makedirs(self.models_dir)
             return
 
-        print(f"🔍 Scanning '{self.models_dir}' for models...")
+        log.info("Scanning '%s' for models...", self.models_dir)
         
         for folder_name in os.listdir(self.models_dir):
             folder_path = os.path.join(self.models_dir, folder_name)
@@ -42,7 +45,7 @@ class InferenceEngine:
                     checkpoint_path = os.path.join(folder_path, meta.checkpoint_name)
 
                     if not os.path.exists(checkpoint_path):
-                        print(f"❌ Checkpoint missing for {folder_name}")
+                        log.error("Checkpoint missing for %s", folder_name)
                         continue
 
                     if meta.engine == ModelEngine.KERAS:
@@ -51,12 +54,10 @@ class InferenceEngine:
                         self.loaded_models[folder_name] = self._load_torch(checkpoint_path, meta, folder_path)
                     
                     self.metadata_store[folder_name] = meta
-                    print(f"✅ Loaded [{meta.engine.value.upper()}] {folder_name}")
+                    log.info("Loaded [%s] %s", meta.engine.value.upper(), folder_name)
 
                 except Exception as e:
-                    print(f"❌ Error loading {folder_name}: {e}")
-                    import traceback
-                    traceback.print_exc()
+                    log.exception("Error loading %s: %s", folder_name, e)
 
     def _dynamic_import(self, folder_path: str, filename: str, object_name: str):
         """Helper to load a class/function from a file dynamically."""
@@ -89,7 +90,7 @@ class InferenceEngine:
 
         # Option A: Python Class Definition (Subclassed Model)
         if meta.python_file and meta.class_name:
-            print(f"   ↳ Instantiating Keras Subclass {meta.class_name} from {meta.python_file}...")
+            log.info("Instantiating Keras Subclass %s from %s", meta.class_name, meta.python_file)
             
             # 1. Dynamically import the class
             ModelClass = self._dynamic_import(folder_path, meta.python_file, meta.class_name)
@@ -106,7 +107,7 @@ class InferenceEngine:
                 model.load_weights(checkpoint_path)
             except ValueError:
                 # Sometimes Keras requires 'build' called first for subclassed models
-                print("      ⚠️ Weights load failed, attempting to build model with dummy input...")
+                log.warning("Weights load failed, attempting to build model with dummy input")
                 # Assuming 3D input based on context, 1 channel. Adjust based on your standard.
                 model.build(input_shape=(None, 64, 64, 64, 1)) 
                 model.load_weights(checkpoint_path)
@@ -123,14 +124,13 @@ class InferenceEngine:
                         custom_obj = self._dynamic_import(folder_path, f"{python_name}.py", python_name)
                         custom_objects_dict[keras_name] = custom_obj
                     except Exception as e:
-                        print(f"   ⚠️ Failed to load custom object {python_name}: {e}")
+                        log.warning("Failed to load custom object %s: %s", python_name, e)
 
             return tf.keras.models.load_model(checkpoint_path, custom_objects=custom_objects_dict)
 
     def _load_torch(self, checkpoint_path: str, meta: ModelMetadata, folder_path: str):
-        # (Same PyTorch logic as previous response)
         if meta.python_file and meta.class_name:
-            print(f"   ↳ Instantiating {meta.class_name} from {meta.python_file}...")
+            log.info("Instantiating %s from %s", meta.class_name, meta.python_file)
             ModelClass = self._dynamic_import(folder_path, meta.python_file, meta.class_name)
             kwargs = meta.model_args if meta.model_args else {}
             model = ModelClass(**kwargs)
@@ -145,7 +145,6 @@ class InferenceEngine:
             return model
 
     def run_inference(self, model_id: str, input_data: np.ndarray):
-        # (Same inference logic as previous response)
         if model_id not in self.loaded_models:
             raise ValueError(f"Model {model_id} not found.")
 
